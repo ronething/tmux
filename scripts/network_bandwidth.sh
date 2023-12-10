@@ -32,6 +32,24 @@ interface_get() {
   echo "$name"
 }
 
+# ref: https://github.com/xamut/tmux-network-bandwidth/blob/63c6b3283d537d9b86489c13b99ba0c65e0edac8/scripts/network-bandwidth.sh#L7C1-L21C2
+# get_bandwidth_for_osx return the number of bytes exchanged for tx and rx on macOS
+get_bandwidth_for_osx() {
+  netstat -ibn | awk 'FNR > 1 {
+    interfaces[$1 ":bytesReceived"] = $(NF-4);
+    interfaces[$1 ":bytesSent"]     = $(NF-1);
+  } END {
+    for (itemKey in interfaces) {
+      split(itemKey, keys, ":");
+      interface = keys[1]
+      dataKind = keys[2]
+      sum[dataKind] += interfaces[itemKey]
+    }
+
+    print sum["bytesReceived"], sum["bytesSent"]
+  }'
+}
+
 # interface_bytes give interface name and signal tx/rx return Bytes
 interface_bytes() {
   cat "/sys/class/net/$1/statistics/$2_bytes"
@@ -39,16 +57,31 @@ interface_bytes() {
 
 # get_bandwidth return the number of bytes exchanged for tx and rx
 get_bandwidth() {
-  upload="$(interface_bytes "$1" "tx")"
-  download="$(interface_bytes "$1" "rx")"
+  local upload download new_upload new_download
 
-  #wait the interval for Wait for interval to calculate the difference
-  sleep "$INTERVAL"
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    upload="$(interface_bytes "$1" "tx")"
+    download="$(interface_bytes "$1" "rx")"
 
-  upload="$(bc <<<"$(interface_bytes "$1" "tx") - $upload")"
-  download="$(bc <<<"$(interface_bytes "$1" "rx") - $download")"
+    # Wait for interval to calculate the difference
+    sleep "$INTERVAL"
 
-  #set to 0 by default useful for non-existent interface
+    new_upload="$(interface_bytes "$1" "tx")"
+    new_download="$(interface_bytes "$1" "rx")"
+  elif [[ "$(uname -s)" == "Darwin" ]]; then
+    read upload download <<<"$(get_bandwidth_for_osx)"
+
+    # Wait for interval to calculate the difference
+    sleep "$INTERVAL"
+
+    read new_upload new_download <<<"$(get_bandwidth_for_osx)"
+  fi
+
+  # Calculate bandwidth
+  upload=$((new_upload - upload))
+  download=$((new_download - download))
+
+  # Set to 0 by default, useful for non-existent interface
   echo "${upload:-0} ${download:-0}"
 }
 
